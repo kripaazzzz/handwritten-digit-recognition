@@ -2,84 +2,89 @@
 import streamlit as st
 import tensorflow as tf
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter
 
-# Page settings
 st.set_page_config(
     page_title="Handwritten Digit Recognition",
-    page_icon="🔢",
-    layout="centered"
+    page_icon="🔢"
 )
 
-# Load the trained model
 @st.cache_resource
 def load_model():
-    return tf.keras.models.load_model(
-        "handwritten_digit_model.keras"
-    )
+    return tf.keras.models.load_model("handwritten_digit_model.keras")
 
 model = load_model()
 
-# App heading
 st.title("Handwritten Digit Recognition")
-st.write(
-    "Upload an image of a handwritten digit "
-    "and let the neural network predict the number."
-)
+st.write("Upload a clear image of one handwritten digit (0–9).")
 
-st.info("Upload a clear image containing one digit (0–9).")
-
-# Image upload
 uploaded_file = st.file_uploader(
-    "Choose a digit image",
+    "Upload digit image",
     type=["png", "jpg", "jpeg"]
 )
 
 if uploaded_file is not None:
     image = Image.open(uploaded_file).convert("L")
+    st.image(image, caption="Original image", width=250)
 
-    st.subheader("Uploaded image")
-    st.image(image, width=250)
+    
+if st.button("Recognize Digit"):
+    # Read the uploaded image
+    image = Image.open(uploaded_file).convert("L")
 
-    if st.button("Recognize Digit"):
-        # MNIST images have light backgrounds and dark digits.
-        # Invert images with predominantly dark backgrounds.
-        image_array = np.array(image)
-        if image_array.mean() < 127:
-            image = ImageOps.invert(image)
+    # Convert to a NumPy array
+    arr = np.array(image)
 
-        # Resize to 28 x 28 pixels
-        image = image.resize((28, 28))
+    # Convert to white digit on black background.
+    # MNIST uses bright digits on a dark background.
+    if arr.mean() > 127:
+        arr = 255 - arr
 
-        # Normalize pixel values
-        image_array = np.array(image).astype("float32") / 255.0
+    # Find the digit pixels
+    mask = arr > 30
 
-        # Add batch dimension: (1, 28, 28)
-        image_array = np.expand_dims(image_array, axis=0)
+    if not mask.any():
+        st.error("No clear digit found. Upload a darker, clearer digit.")
+    else:
+        ys, xs = np.where(mask)
+
+        # Crop closely around the digit
+        cropped = arr[
+            ys.min():ys.max() + 1,
+            xs.min():xs.max() + 1
+        ]
+
+        # Preserve aspect ratio and fit inside 20x20
+        digit_image = Image.fromarray(cropped.astype("uint8"))
+        digit_image.thumbnail((20, 20), Image.Resampling.LANCZOS)
+
+        # Center on a 28x28 black canvas
+        canvas = Image.new("L", (28, 28), 0)
+        x = (28 - digit_image.width) // 2
+        y = (28 - digit_image.height) // 2
+        canvas.paste(digit_image, (x, y))
+
+        # Normalize exactly like the training images
+        model_input = np.array(canvas).astype("float32") / 255.0
+        model_input = model_input.reshape(1, 28, 28, 1)
+
+        # Display the actual input to the model
+        st.image(
+            canvas,
+            caption="Processed image sent to CNN",
+            width=200
+        )
 
         # Predict
-        probabilities = model.predict(
-            image_array, verbose=0
-        )[0]
-
-        predicted_digit = int(np.argmax(probabilities))
+        probabilities = model.predict(model_input, verbose=0)[0]
+        digit = int(np.argmax(probabilities))
         confidence = float(np.max(probabilities)) * 100
 
-        st.success(
-            f"Predicted Digit: {predicted_digit}"
-        )
-        st.metric(
-            "Model Confidence",
-            f"{confidence:.2f}%"
-        )
+        st.success(f"Predicted digit: {digit}")
+        st.metric("Confidence", f"{confidence:.2f}%")
 
-        st.subheader("Probabilities for each digit")
         st.bar_chart({
             str(i): float(probabilities[i])
             for i in range(10)
         })
-
-st.caption(
-    "Built using Python, TensorFlow, Keras and Streamlit."
-)
 
